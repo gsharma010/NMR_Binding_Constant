@@ -1,0 +1,126 @@
+# Calculate kd for single residue fit. Please cite research article below if you use the code or parts of the code. Thank you
+
+# Gagan Sharma, Jennifer R. Deuis, Xinying Jia, Alexander Mueller, Irina Vetter, and Mehdi Mobli. 
+# "Recombinant production, bioconjugation and membrane binding studies of Pn3a, a selective NaV1. 7 inhibitor." Biochemical Pharmacology (2020): 114148.
+
+# Associated data set available upon request. Please email g.sharma@uqconnect.edu.au or m.mobli@uq.edu.au
+
+# add necessary Julia packages 
+using Pkg
+Pkg.add("DelimitedFiles")
+Pkg.add("Random")
+Pkg.add("LsqFit")
+Pkg.add("CSV")
+Pkg.add("Distributions")
+Pkg.add("Plots")
+Pkg.add("Gadfly")
+using Random, CSV, DelimitedFiles, LsqFit, Distributions, Plots, Gadfly
+
+# Load data
+# Data is obtained at 900 MHz NMR spectrometer (UQ, Australia). w1a represents 1H (from amide backbone) chemical shift 
+# for each amino acid. Similarly, w2a represents 15N chemical shift (amide backbone). These w1a and w2a change on 
+# addition of lipid nanodiscs. We will monitor chemical shift changes for individual atoms (1H and 15N). These chemical 
+# shift changes will then be fitted to equation 7 and 8 (see attached paper ChemicalShiftPerturbation_Williamson).
+tit_data = CSV.read("Titration_GS_Scaled_edit1.csv")
+
+# data head
+# 35 rows × 21 columns (omitted printing of 15 columns)
+# Column1	Pn3a only	Column3	Column4	Column5	Pn3a and nanodisc 0.02
+# String	String	String	String	String	String
+# 1	Assignment	 w1a	          w2a	     Height	Volume	 w1a
+# 2	A.2.ASP.H	7.606715155	120.5978691	64950712	None	7.600852883
+
+# Omit header for columns, removed w1a, w2a and so on..
+tit_Data = tit_data[2:end, :]
+
+# Get control groups and define H signal column index, control group refers to chemical shift of the peptide backbone
+# (1H) when no membrane interaction takes place 
+control_H  = parse.(Float64, tit_Data[:, 2])
+
+# Get control groups and define N signal column index control group refers to chemical shift of the peptide backbone
+# (15N) when no membrane interaction takes place 
+control_N  = parse.(Float64, tit_Data[:, 3])
+
+# Set range for H data columns in excel file, this includes the tiration points
+col_H = 6:4:21
+
+# Set range for N data columns in excel file, includes titration points
+col_N = 7:4:21
+
+## Get H signal value into list, generate an array for H signal
+H_sig = []
+
+# Get H signal value into list, parse H signal into this array using a for loop
+for i in col_H
+    push!(H_sig, parse.(Float64, tit_Data[:,i]))
+end
+
+# Get N signal value into list, generate an array for N signal
+N_sig = []
+
+# get N signal value into list, parse N signal into this array using a for loop
+for i in col_N
+    push!(N_sig, parse.(Float64, tit_Data[:,i]))
+end
+
+# calculate delta H and delta N for each ligand concentration. # These correspond to the euclidean distance chemical shift (upon titrations) for each residue.
+Delta_H = []
+Delta_N = []
+for i in 1:4
+    push!(Delta_H, control_H .- H_sig[i])
+    push!(Delta_N, control_N .- N_sig[i])
+end
+
+# set alpha, alpha refers to the scaling factor for the nitrogen atom. This value is chosen according to the standard practice. Proposed range is [0.10, 0.45].
+# Can increase the value of alpha if significant conformational change is observed (upon ligand binding).
+alpha = 0.15
+
+# euclidan distance d for all residues and all ligand concentrations
+# Average euclidean distance moved
+d_all = []
+for i in 1:4
+    push!(d_all, sqrt.(0.5 .*(Delta_H[i].^2 .+ alpha.*(Delta_N[i].^2))))
+end
+
+# Individal elements of the d_all are extracted and written to separate files.
+
+# Euclidean distance moved at first titration point
+d_all_tit1 = broadcast(abs, d_all[1,1])
+writedlm("./d_all_tit1.csv", d_all_tit1);
+
+# Euclidean distance moved at second titration point
+d_all_tit2 = broadcast(abs, d_all[2,1])
+writedlm("./d_all_tit2.csv", d_all_tit2);
+
+# Euclidean distance moved at third titration point
+d_all_tit3 = broadcast(abs, d_all[3,1])
+writedlm("./d_all_tit3.csv", d_all_tit3);
+
+# Euclidean distance moved at fourth titration point
+d_all_tit4 = broadcast(abs, d_all[4,1])
+writedlm("./d_all_tit4.csv", d_all_tit4);
+
+# p0 = [p1, p2], p1 is conservatively assumed to be 3 ppm (initial value of euclidean distance), similarly p2 (dissociation constant) is assumed to be 100 uM.
+p0 = [3.0, 100.0] # p1 is starting value of dmax and p2 is binding constant's initial value
+
+# Receptor concentration’s (different concentration of nanodiscs in uM)
+xdatanmr = [0.6, 1.2, 1.8, 2.4]
+
+# no of binding sites, calulated from ITC experiments, nanodisc symmetry tells us that 2 peptides per nanodisc binding should be okay.
+n = 1.71
+
+# protein concentration in uM (fixed during NMR experiment)
+Pt = 30.0
+
+# LsqFit package (Levenberg-Marquardt algorithm for non-linear fitting), curve fitting equaltion 7 in Williamson paper (attached) and equation 2 in our reference.
+kd_all_res = []
+    @. m(x, p) = p[1] *(Pt*n + p[2] + x  - sqrt(complex(Pt*n + p[2]+ x)^2 - 4*Pt*x*n))/(2*Pt*n)
+    for i in 1:34
+        ydatanmr = [d_all[1][i], d_all[2][i], d_all[3][i], d_all[4][i]]
+        fit2 = curve_fit(m, xdatanmr, ydatanmr, p0)
+        push!(kd_all_res, fit2.param)
+    end 
+   
+# Residue specific Kd output, these single residue fits can now be used to perform global fitting to calculate Kd of the peptide. 
+return kd_all_res
+writedlm("./kd_all_res_singleFit.csv", kd_all_res);
